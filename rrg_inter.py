@@ -77,7 +77,7 @@ with col1:
                            help="Number of historical points to show as tail")
 
 with col2:
-    short_period = st.slider("Momentum Period", 1, 20, 5, 
+    short_period = st.slider("Momentum Period", 1, 100, 5, 
                             help="Period for momentum calculation")
     curve_smoothness = st.slider("Curve Smoothness", 0, 100, 30, 
                                help="Smoothness of the RRG path curves")
