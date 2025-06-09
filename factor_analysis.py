@@ -589,7 +589,7 @@ with tab4:
         if not low_vol_missing_data['worst_misses'].empty:
             low_vol_dropped = low_vol_missing_data['worst_misses'][
                 ['ID', 'Company Name', 'Holding Percentage', 'factor_score', 'quartile']
-            ].head(10).copy()
+            ].copy()
             low_vol_dropped.columns = ['Stock ID', 'Company Name', 'Previous Weight (%)', 'Factor Score', 'Quartile']
             st.dataframe(low_vol_dropped, use_container_width=True)
         else:
@@ -600,7 +600,7 @@ with tab4:
         if not momentum_missing_data['worst_misses'].empty:
             momentum_dropped = momentum_missing_data['worst_misses'][
                 ['ID', 'Company Name', 'Holding Percentage', 'factor_score', 'quartile']
-            ].head(10).copy()
+            ].copy()
             momentum_dropped.columns = ['Stock ID', 'Company Name', 'Previous Weight (%)', 'Factor Score', 'Quartile']
             st.dataframe(momentum_dropped, use_container_width=True)
         else:
