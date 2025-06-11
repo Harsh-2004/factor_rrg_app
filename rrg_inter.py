@@ -102,12 +102,12 @@ def calculate_rrg(df, sectors, benchmark, rolling_window, short_period, slice_wi
     rs_ratios_smoothed = rs_ratios.rolling(window=max(5, short_period)).mean()
     
     # Step 3: Calculate momentum as SLOPE/TREND (not simple rate of change)
-    rs_momentum = rs_ratios_smoothed.rolling(window=short_period).apply(
-        lambda x: np.polyfit(range(len(x)), x, 1)[0] if len(x) >= 2 else 0, raw=False
-    ) * 10000  # Scale for visibility
+    # rs_momentum = rs_ratios_smoothed.rolling(window=short_period).apply(
+    #     lambda x: np.polyfit(range(len(x)), x, 1)[0] if len(x) >= 2 else 0, raw=False
+    # ) * 10000  # Scale for visibility
     
     # Alternative momentum (if slope doesn't work well):
-    # rs_momentum = rs_ratios_smoothed.diff(short_period) / rs_ratios_smoothed.shift(short_period) * 100
+    rs_momentum = rs_ratios_smoothed.diff(short_period) / rs_ratios_smoothed.shift(short_period) * 100
     
     # Step 4: Normalize using shorter rolling window to reduce lag
     normalization_window = min(rolling_window, 30)  # Shorter window
