@@ -90,26 +90,39 @@ if animate:
     animation_speed = st.slider("Animation Speed (ms)", 100, 2000, 500, 
                               help="Speed of the animation in milliseconds")
 
-# Calculate RRG metrics
 def calculate_rrg(df, sectors, benchmark, rolling_window, short_period, slice_window):
-    # Calculate Relative Strength Ratio (price of sector / price of benchmark)
+    """
+    Corrected RRG calculation - direct replacement for your existing function
+    """
+    # Step 1: Calculate RS Ratio
     rs_ratios = df[sectors].div(df[benchmark], axis=0)
+    rs_ratios = rs_ratios.iloc[::slice_window]
     
-    # Calculate momentum
-    rs_momentum = (rs_ratios / rs_ratios.shift(short_period) - 1) * 100
+    # Step 2: Smooth RS ratios FIRST (this is crucial)
+    rs_ratios_smoothed = rs_ratios.rolling(window=max(5, short_period)).mean()
     
-    # Normalize both ratio and momentum
-    rs_ratios_normalized = rs_ratios.rolling(window=rolling_window).apply(
-        lambda x: (x.iloc[-1] - x.mean()) / x.std() if len(x.dropna()) > 1 else 0
+    # Step 3: Calculate momentum as SLOPE/TREND (not simple rate of change)
+    rs_momentum = rs_ratios_smoothed.rolling(window=short_period).apply(
+        lambda x: np.polyfit(range(len(x)), x, 1)[0] if len(x) >= 2 else 0, raw=False
+    ) * 10000  # Scale for visibility
+    
+    # Alternative momentum (if slope doesn't work well):
+    # rs_momentum = rs_ratios_smoothed.diff(short_period) / rs_ratios_smoothed.shift(short_period) * 100
+    
+    # Step 4: Normalize using shorter rolling window to reduce lag
+    normalization_window = min(rolling_window, 30)  # Shorter window
+    
+    rs_ratios_normalized = rs_ratios_smoothed.rolling(window=normalization_window).apply(
+        lambda x: (x.iloc[-1] - x.mean()) / x.std() if len(x.dropna()) > 1 and x.std() > 0 else 0
     )
     
-    rs_momentum_normalized = rs_momentum.rolling(window=rolling_window).apply(
-        lambda x: (x.iloc[-1] - x.mean()) / x.std() if len(x.dropna()) > 1 else 0
+    rs_momentum_normalized = rs_momentum.rolling(window=normalization_window).apply(
+        lambda x: (x.iloc[-1] - x.mean()) / x.std() if len(x.dropna()) > 1 and x.std() > 0 else 0
     )
     
-    # Slice the data
-    rs_ratios_normalized = rs_ratios_normalized.iloc[::slice_window]
-    rs_momentum_normalized = rs_momentum_normalized.iloc[::slice_window]
+    # Step 5: Slice the data
+    # rs_ratios_normalized = rs_ratios_normalized.iloc[::slice_window]
+    # rs_momentum_normalized = rs_momentum_normalized.iloc[::slice_window]
     
     return rs_ratios_normalized, rs_momentum_normalized
 
