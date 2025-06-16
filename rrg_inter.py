@@ -69,11 +69,11 @@ st.sidebar.subheader("Analysis Parameters")
 col1, col2 = st.sidebar.columns(2)
 
 with col1:
-    rolling_window = st.slider("Rolling Window", 10, 200, 64, 
+    rolling_window = st.slider("Rolling Window", 10, 200, 36, 
                              help="Window size for rolling Z-score calculation")
-    slice_window = st.slider("Slice Window", 1, 20, 5, 
+    slice_window = st.slider("Slice Window", 1, 20, 7, 
                            help="Interval between points on the RRG path")
-    tail_length = st.slider("Tail Length", 5, 50, 10, 
+    tail_length = st.slider("Tail Length", 6, 50, 10, 
                            help="Number of historical points to show as tail")
 
 with col2:
