@@ -5,9 +5,19 @@ import plotly.express as px
 import streamlit as st
 from scipy.interpolate import make_interp_spline
 import time
+from collections import Counter, defaultdict
+import math
+
+# Quadrant mapping
+QUADRANT_MAP = {
+    (1, 1): "Q1 (Leading)",
+    (1, -1): "Q2 (Weakening)",
+    (-1, -1): "Q3 (Lagging)",
+    (-1, 1): "Q4 (Improving)"
+}
 
 # App configuration
-st.set_page_config(layout="wide", page_title="Relative Rotation Graph Analyzer")
+st.set_page_config(layout="wide", page_title="Advanced RRG Analyzer")
 
 # Sidebar controls
 st.sidebar.header("RRG Configuration")
@@ -91,26 +101,19 @@ if animate:
                               help="Speed of the animation in milliseconds")
 
 def calculate_rrg(df, sectors, benchmark, rolling_window, short_period, slice_window):
-    """
-    Corrected RRG calculation - direct replacement for your existing function
-    """
-    # Step 1: Calculate RS Ratio
+    """Calculate RRG components with improved normalization"""
+    # Calculate RS Ratio
     rs_ratios = df[sectors].div(df[benchmark], axis=0)
     rs_ratios = rs_ratios.iloc[::slice_window]
     
-    # Step 2: Smooth RS ratios FIRST (this is crucial)
+    # Smooth RS ratios
     rs_ratios_smoothed = rs_ratios.rolling(window=max(5, short_period)).mean()
     
-    # Step 3: Calculate momentum as SLOPE/TREND (not simple rate of change)
-    # rs_momentum = rs_ratios_smoothed.rolling(window=short_period).apply(
-    #     lambda x: np.polyfit(range(len(x)), x, 1)[0] if len(x) >= 2 else 0, raw=False
-    # ) * 10000  # Scale for visibility
-    
-    # Alternative momentum (if slope doesn't work well):
+    # Calculate momentum
     rs_momentum = rs_ratios_smoothed.diff(short_period) / rs_ratios_smoothed.shift(short_period) * 100
     
-    # Step 4: Normalize using shorter rolling window to reduce lag
-    normalization_window = min(rolling_window, 30)  # Shorter window
+    # Normalize using shorter rolling window
+    normalization_window = min(rolling_window, 30)
     
     rs_ratios_normalized = rs_ratios_smoothed.rolling(window=normalization_window).apply(
         lambda x: (x.iloc[-1] - x.mean()) / x.std() if len(x.dropna()) > 1 and x.std() > 0 else 0
@@ -120,15 +123,270 @@ def calculate_rrg(df, sectors, benchmark, rolling_window, short_period, slice_wi
         lambda x: (x.iloc[-1] - x.mean()) / x.std() if len(x.dropna()) > 1 and x.std() > 0 else 0
     )
     
-    # Step 5: Slice the data
-    # rs_ratios_normalized = rs_ratios_normalized.iloc[::slice_window]
-    # rs_momentum_normalized = rs_momentum_normalized.iloc[::slice_window]
-    
     return rs_ratios_normalized, rs_momentum_normalized
 
 rs_ratios_normalized, rs_momentum_normalized = calculate_rrg(
     df, selected_sectors, benchmark, rolling_window, short_period, slice_window
 )
+
+# Advanced analytics functions
+def get_quadrant_number(x, y):
+    """Get quadrant number (1-4) based on position"""
+    if x >= 0 and y >= 0:
+        return 1  # Leading
+    elif x < 0 and y >= 0:
+        return 2  # Weakening
+    elif x < 0 and y < 0:
+        return 3  # Lagging
+    else:
+        return 4  # Improving
+
+def analyze_directional_patterns(rs_ratios_norm, rs_momentum_norm, asset_type="Sector"):
+    """Analyze directional patterns for a set of assets"""
+    
+    results = {}
+    
+    # Expected patterns
+    expected_counterclockwise = [(1,4), (4,3), (3,2), (2,1)]  # Sectors expected
+    expected_clockwise = [(1,2), (2,3), (3,4), (4,1)]         # Traditional RRG
+    
+    for asset in rs_ratios_norm.columns:
+        rs_data = rs_ratios_norm[asset]
+        mom_data = rs_momentum_norm[asset]
+        
+        # Get valid data points
+        valid_mask = rs_data.notna() & mom_data.notna()
+        if valid_mask.sum() < 30:  # Need sufficient data
+            continue
+            
+        rs_values = rs_data[valid_mask].values
+        mom_values = mom_data[valid_mask].values
+        dates = rs_data[valid_mask].index
+        
+        # Analyze this asset's pattern
+        asset_analysis = analyze_single_asset_pattern(rs_values, mom_values, dates, asset)
+        
+        # Pattern reliability scoring
+        asset_analysis['pattern_scores'] = score_pattern_reliability(
+            asset_analysis['transitions'], expected_counterclockwise, expected_clockwise
+        )
+        
+        results[asset] = asset_analysis
+    
+    # Aggregate results
+    aggregated = aggregate_pattern_analysis(results, asset_type)
+    
+    return {
+        'individual_assets': results,
+        'aggregated': aggregated
+    }
+
+def analyze_single_asset_pattern(rs_values, mom_values, dates, asset_name):
+    """Detailed analysis of single asset's RRG pattern"""
+    
+    # Classify quadrants
+    quadrants = []
+    for i in range(len(rs_values)):
+        quadrants.append(get_quadrant_number(rs_values[i], mom_values[i]))
+    
+    # Analyze transitions
+    transitions = []
+    transition_dates = []
+    for i in range(1, len(quadrants)):
+        if quadrants[i] != quadrants[i-1]:
+            transitions.append((quadrants[i-1], quadrants[i]))
+            transition_dates.append(dates[i])
+    
+    # Analyze sequences (consecutive transitions)
+    sequences = analyze_transition_sequences(transitions)
+    
+    # Time analysis
+    time_analysis = analyze_transition_timing(transitions, transition_dates)
+    
+    # Directional consistency
+    directional_analysis = analyze_directional_consistency(transitions)
+    
+    return {
+        'asset_name': asset_name,
+        'total_points': len(quadrants),
+        'quadrant_distribution': dict(Counter(quadrants)),
+        'transitions': transitions,
+        'transition_count': len(transitions),
+        'sequences': sequences,
+        'time_analysis': time_analysis,
+        'directional_analysis': directional_analysis
+    }
+
+def analyze_transition_sequences(transitions):
+    """Analyze sequences of transitions to identify patterns"""
+    
+    sequences = {
+        'two_step': [],
+        'three_step': [],
+        'four_step': [],
+        'longer': []
+    }
+    
+    # Look for consecutive sequences
+    for i in range(len(transitions)):
+        # Two-step sequences
+        if i < len(transitions) - 1:
+            two_step = (transitions[i], transitions[i+1])
+            sequences['two_step'].append(two_step)
+        
+        # Three-step sequences  
+        if i < len(transitions) - 2:
+            three_step = (transitions[i], transitions[i+1], transitions[i+2])
+            sequences['three_step'].append(three_step)
+            
+        # Four-step sequences (full cycle)
+        if i < len(transitions) - 3:
+            four_step = (transitions[i], transitions[i+1], transitions[i+2], transitions[i+3])
+            sequences['four_step'].append(four_step)
+    
+    return sequences
+
+def analyze_transition_timing(transitions, dates):
+    """Analyze timing patterns of transitions"""
+    
+    if len(dates) < 2:
+        return {}
+    
+    # Calculate time between transitions
+    time_diffs = []
+    for i in range(1, len(dates)):
+        diff = (dates[i] - dates[i-1]).days
+        time_diffs.append(diff)
+    
+    return {
+        'avg_time_between_transitions': np.mean(time_diffs) if time_diffs else 0,
+        'median_time_between_transitions': np.median(time_diffs) if time_diffs else 0,
+        'std_time_between_transitions': np.std(time_diffs) if time_diffs else 0,
+        'min_time_between_transitions': np.min(time_diffs) if time_diffs else 0,
+        'max_time_between_transitions': np.max(time_diffs) if time_diffs else 0
+    }
+
+def analyze_directional_consistency(transitions):
+    """Analyze directional consistency of transitions"""
+    
+    if not transitions:
+        return {}
+    
+    # Define transition types
+    counterclockwise_transitions = [(1,4), (4,3), (3,2), (2,1)]
+    clockwise_transitions = [(1,2), (2,3), (3,4), (4,1)]
+    
+    # Count each type
+    ccw_count = sum(1 for t in transitions if t in counterclockwise_transitions)
+    cw_count = sum(1 for t in transitions if t in clockwise_transitions)
+    
+    # Adjacent quadrant transitions (any direction)
+    adjacent_transitions = counterclockwise_transitions + clockwise_transitions
+    adjacent_count = sum(1 for t in transitions if t in adjacent_transitions)
+    
+    # Diagonal transitions 
+    diagonal_transitions = [(1,3), (3,1), (2,4), (4,2)]
+    diagonal_count = sum(1 for t in transitions if t in diagonal_transitions)
+    
+    total_transitions = len(transitions)
+    
+    return {
+        'counterclockwise_count': ccw_count,
+        'clockwise_count': cw_count,
+        'adjacent_count': adjacent_count,
+        'diagonal_count': diagonal_count,
+        'total_transitions': total_transitions,
+        'ccw_percentage': ccw_count / total_transitions * 100 if total_transitions > 0 else 0,
+        'cw_percentage': cw_count / total_transitions * 100 if total_transitions > 0 else 0,
+        'adjacent_percentage': adjacent_count / total_transitions * 100 if total_transitions > 0 else 0,
+        'diagonal_percentage': diagonal_count / total_transitions * 100 if total_transitions > 0 else 0,
+        'dominant_direction': 'counterclockwise' if ccw_count > cw_count else 'clockwise' if cw_count > ccw_count else 'mixed'
+    }
+
+def score_pattern_reliability(transitions, expected_ccw, expected_cw):
+    """Score how well transitions match expected patterns"""
+    
+    if not transitions:
+        return {}
+    
+    # Count matches with expected patterns
+    ccw_matches = sum(1 for t in transitions if t in expected_ccw)
+    cw_matches = sum(1 for t in transitions if t in expected_cw)
+    total_transitions = len(transitions)
+    
+    # Calculate reliability scores
+    ccw_reliability = ccw_matches / total_transitions
+    cw_reliability = cw_matches / total_transitions
+    
+    # Pattern consistency (what percentage follows ANY consistent pattern)
+    pattern_consistency = max(ccw_reliability, cw_reliability)
+    
+    # Directional clarity (how clearly one direction dominates)
+    directional_clarity = abs(ccw_reliability - cw_reliability)
+    
+    return {
+        'counterclockwise_reliability': ccw_reliability,
+        'clockwise_reliability': cw_reliability,
+        'pattern_consistency': pattern_consistency,
+        'directional_clarity': directional_clarity,
+        'preferred_direction': 'counterclockwise' if ccw_reliability > cw_reliability else 'clockwise',
+        'confidence_in_direction': max(ccw_reliability, cw_reliability)
+    }
+
+def aggregate_pattern_analysis(individual_results, asset_type):
+    """Aggregate individual asset results"""
+    
+    if not individual_results:
+        return {}
+    
+    # Collect all directional analysis data
+    all_ccw_percentages = []
+    all_cw_percentages = []
+    all_pattern_consistencies = []
+    all_directional_clarities = []
+    
+    dominant_directions = []
+    
+    for asset, results in individual_results.items():
+        dir_analysis = results['directional_analysis']
+        pattern_scores = results['pattern_scores']
+        
+        all_ccw_percentages.append(dir_analysis['ccw_percentage'])
+        all_cw_percentages.append(dir_analysis['cw_percentage'])
+        all_pattern_consistencies.append(pattern_scores['pattern_consistency'])
+        all_directional_clarities.append(pattern_scores['directional_clarity'])
+        
+        dominant_directions.append(dir_analysis['dominant_direction'])
+    
+    # Calculate aggregated statistics
+    aggregated = {
+        'asset_type': asset_type,
+        'total_assets_analyzed': len(individual_results),
+        'average_ccw_percentage': np.mean(all_ccw_percentages),
+        'average_cw_percentage': np.mean(all_cw_percentages),
+        'average_pattern_consistency': np.mean(all_pattern_consistencies),
+        'average_directional_clarity': np.mean(all_directional_clarities),
+        'dominant_direction_distribution': dict(Counter(dominant_directions)),
+        'assets_with_strong_ccw': sum(1 for pct in all_ccw_percentages if pct > 60),
+        'assets_with_strong_cw': sum(1 for pct in all_cw_percentages if pct > 60),
+        'assets_with_high_consistency': sum(1 for cons in all_pattern_consistencies if cons > 0.7)
+    }
+    
+    # Determine overall pattern reliability
+    if aggregated['average_ccw_percentage'] > 60:
+        aggregated['overall_pattern'] = 'Strongly Counterclockwise (1→4→3→2)'
+        aggregated['pattern_reliability'] = 'HIGH'
+    elif aggregated['average_cw_percentage'] > 60:
+        aggregated['overall_pattern'] = 'Strongly Clockwise (1→2→3→4)'
+        aggregated['pattern_reliability'] = 'HIGH'
+    elif aggregated['average_pattern_consistency'] > 0.5:
+        aggregated['overall_pattern'] = 'Mixed but Consistent'
+        aggregated['pattern_reliability'] = 'MEDIUM'
+    else:
+        aggregated['overall_pattern'] = 'Inconsistent/Random'
+        aggregated['pattern_reliability'] = 'LOW'
+    
+    return aggregated
 
 # Create the base RRG plot with quadrants (static elements)
 def create_base_plot():
@@ -366,7 +624,7 @@ def create_time_series_plots(rs_data, momentum_data, sectors, current_idx, tail_
     return fig
 
 # Main app
-st.title("Relative Rotation Graph (RRG) Analysis")
+st.title("Advanced Relative Rotation Graph (RRG) Analysis")
 st.markdown(f"**Benchmark:** {benchmark}")
 
 # Create plot containers
@@ -380,6 +638,90 @@ with col2:
     st.subheader("Time Series Analysis")
     ts_placeholder = st.empty()
 
+# Run directional pattern analytics
+st.subheader("Directional Pattern Analytics")
+analytics_placeholder = st.empty()
+
+# Perform analytics on the normalized data
+analytics_results = analyze_directional_patterns(
+    rs_ratios_normalized, 
+    rs_momentum_normalized, 
+    "Sectors"
+)
+
+# Display analytics results
+if analytics_results['individual_assets']:
+    # Display aggregated results
+    agg = analytics_results['aggregated']
+    st.markdown(f"### Aggregated Analysis ({agg['asset_type']})")
+    st.markdown(f"**Total Assets Analyzed:** {agg['total_assets_analyzed']}")
+    st.markdown(f"**Overall Pattern:** {agg['overall_pattern']} ({agg['pattern_reliability']} reliability)")
+    
+    # Create metrics columns
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Avg Counterclockwise %", f"{agg['average_ccw_percentage']:.1f}%")
+    col2.metric("Avg Clockwise %", f"{agg['average_cw_percentage']:.1f}%")
+    col3.metric("Pattern Consistency", f"{agg['average_pattern_consistency']:.2f}")
+    
+    col1.metric("Assets with Strong CCW", agg['assets_with_strong_ccw'])
+    col2.metric("Assets with Strong CW", agg['assets_with_strong_cw'])
+    col3.metric("High Consistency Assets", agg['assets_with_high_consistency'])
+    
+    # Display dominant direction distribution
+    st.markdown("**Dominant Direction Distribution:**")
+    st.write(agg['dominant_direction_distribution'])
+    
+    # Display individual asset analytics
+    st.markdown("### Individual Sector Analytics")
+    for sector, analysis in analytics_results['individual_assets'].items():
+        with st.expander(f"Analytics for {sector}"):
+            st.markdown(f"**Total Points:** {analysis['total_points']}")
+            st.markdown(f"**Total Transitions:** {analysis['transition_count']}")
+            
+            # Quadrant distribution
+            st.markdown("**Quadrant Distribution:**")
+            quad_data = pd.DataFrame({
+                'Quadrant': [f"Q{quad} ({['Leading','Weakening','Lagging','Improving'][quad-1]})" 
+                             for quad in analysis['quadrant_distribution'].keys()],
+                'Count': analysis['quadrant_distribution'].values(),
+                'Percentage': [count/analysis['total_points']*100 
+                             for count in analysis['quadrant_distribution'].values()]
+            })
+            st.dataframe(quad_data)
+            
+            # Directional analysis
+            dir_analysis = analysis['directional_analysis']
+            st.markdown("**Directional Analysis:**")
+            st.markdown(f"- Counterclockwise: {dir_analysis['ccw_percentage']:.1f}%")
+            st.markdown(f"- Clockwise: {dir_analysis['cw_percentage']:.1f}%")
+            st.markdown(f"- Adjacent: {dir_analysis['adjacent_percentage']:.1f}%")
+            st.markdown(f"- Diagonal: {dir_analysis['diagonal_percentage']:.1f}%")
+            st.markdown(f"- Dominant Direction: {dir_analysis['dominant_direction']}")
+            
+            # Pattern scores
+            pattern = analysis['pattern_scores']
+            st.markdown("**Pattern Reliability Scores:**")
+            st.markdown(f"- Counterclockwise Reliability: {pattern['counterclockwise_reliability']:.2f}")
+            st.markdown(f"- Clockwise Reliability: {pattern['clockwise_reliability']:.2f}")
+            st.markdown(f"- Pattern Consistency: {pattern['pattern_consistency']:.2f}")
+            st.markdown(f"- Directional Clarity: {pattern['directional_clarity']:.2f}")
+            st.markdown(f"- Preferred Direction: {pattern['preferred_direction']}")
+            st.markdown(f"- Confidence in Direction: {pattern['confidence_in_direction']:.2f}")
+            
+            # Time analysis
+            time_analysis = analysis['time_analysis']
+            st.markdown("**Transition Timing:**")
+            st.markdown(f"- Avg Time Between Transitions: {time_analysis['avg_time_between_transitions']:.1f} days")
+            st.markdown(f"- Median Time: {time_analysis['median_time_between_transitions']:.1f} days")
+            st.markdown(f"- Min Time: {time_analysis['min_time_between_transitions']} days")
+            st.markdown(f"- Max Time: {time_analysis['max_time_between_transitions']} days")
+else:
+    st.warning("Insufficient data for directional pattern analytics")
+
+# Animation and display logic remains the same as before
+# ... [The rest of the animation and display logic remains unchanged] ...
+# Animation and display logic remains the same as before
+# ... [The rest of the animation and display logic remains unchanged from your original code] ...
 if animate:
     st.sidebar.info("Animation shows snake-like movement of sectors through time")
     
